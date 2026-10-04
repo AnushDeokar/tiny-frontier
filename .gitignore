@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+
+# Data
+data/*.bin
+data/*.json
+data/*.txt
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+
+# Experiment runs
+runs/*
+!runs/.gitkeep
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary
+*.tmp
+*.log

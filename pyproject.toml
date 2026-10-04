@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "tiny-frontier"
+version = "0.1.0"
+description = "Experiments on cheap long-context memory in small language models"
+authors = ["Anush"]
+readme = "README.md"
+packages = [{ include = "tiny_frontier", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+torch = "*"
+numpy = "*"
+tokenizers = "*"
+datasets = "*"
+matplotlib = "*"
+pyyaml = "*"
+tqdm = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+ruff = "*"
+ipykernel = "^7.4.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
