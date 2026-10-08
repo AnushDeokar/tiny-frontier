@@ -1,6 +1,6 @@
 import torch
 
-from data.loader import load_tokens, get_batch
+from tiny_frontier.data.loader import load_tokens, get_batch
 from tiny_frontier.model.model import LlamaModel
 from tiny_frontier.training.loss import lm_loss
 

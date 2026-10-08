@@ -3,8 +3,8 @@ import json
 
 import numpy as np
 
-from data.tinystories import load_tinystories
-from data.tokenizer import EOS_TOKEN, load_tokenizer
+from tiny_frontier.data.tinystories import load_tinystories
+from tiny_frontier.data.tokenizer import EOS_TOKEN, load_tokenizer
 
 
 def tokenize_split(tokenizer, dataset, split, output_path, max_tokens):
