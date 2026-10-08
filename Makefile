@@ -13,7 +13,7 @@ format:
 	poetry run ruff format .
 
 train:
-	poetry run python -m tiny_frontier.train --config configs/dummy.yaml
+	poetry run python -m tiny_frontier.training.train --config configs/dummy.yaml
 
 clean:
 	rm -rf .pytest_cache

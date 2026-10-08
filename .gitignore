@@ -22,8 +22,9 @@ data/*.json
 checkpoints/
 
 # Experiment runs
-runs/*
-!runs/.gitkeep
+# Run folders: keep only summary.json in git (weights, logs and plots stay local)
+runs/*/*
+!runs/*/summary.json
 
 # OS
 .DS_Store

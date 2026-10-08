@@ -1,0 +1,21 @@
+# Smoke test + speed benchmark: the control model for 200 steps.
+# Use it to check the pipeline end to end and to measure tokens/sec on your machine.
+name: dummy
+
+model:
+  vocab_size: 4096
+  d_model: 192
+  n_heads: 6
+  d_ff: 512
+  n_layers: 6
+  max_seq_len: 256
+
+train:
+  seed: 1337
+  batch_size: 32
+  total_tokens: 1638400    # 200 steps * 32 * 256
+  lr: 3.0e-3
+  warmup_steps: 20
+  eval_every: 100
+  eval_batches: 10
+  log_every: 20

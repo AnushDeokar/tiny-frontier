@@ -1,0 +1,24 @@
+# The control model: every experiment is compared against this.
+name: control
+
+model:
+  vocab_size: 4096
+  d_model: 192
+  n_heads: 6
+  d_ff: 512
+  n_layers: 6
+  max_seq_len: 256
+
+train:
+  seed: 1337
+  batch_size: 32
+  total_tokens: 50000000   # 50M tokens ~ 6,100 steps
+  lr: 3.0e-3               # placeholder until the LR sweep picks the real value
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  eval_every: 250
+  eval_batches: 60
