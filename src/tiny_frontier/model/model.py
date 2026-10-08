@@ -21,7 +21,10 @@ class LlamaModel(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, d_model)
         head_dim = d_model // n_heads
         self.rope = RotaryEmbedding(head_dim, max_seq_len)
-        self.blocks = nn.ModuleList([DecoderBlock(d_model, n_heads, d_ff, self.rope) for _ in range(n_layers)])
+        self.blocks = nn.ModuleList([
+            DecoderBlock(d_model, n_heads, d_ff, self.rope, layer_idx=i)
+            for i in range(n_layers)
+        ])
         self.norm = RMSNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
 

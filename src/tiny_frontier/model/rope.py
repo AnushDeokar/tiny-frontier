@@ -26,13 +26,14 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("cos", emb.cos(), persistent=False)
         self.register_buffer("sin", emb.sin(), persistent=False)
 
-    def forward(self, x):
+    def forward(self, x, offset=0):
         seq_len = x.size(1)
-        if seq_len > self.max_seq_len:
+        end = offset + seq_len
+        if end > self.max_seq_len:
             raise ValueError(
-                f"sequence length {seq_len} exceeds max_seq_len {self.max_seq_len}"
+                f"sequence length {end} exceeds max_seq_len {self.max_seq_len}"
             )
         middle = [1] * (x.ndim - 3)
-        cos = self.cos[:seq_len].to(dtype=x.dtype).view(1, seq_len, *middle, -1)
-        sin = self.sin[:seq_len].to(dtype=x.dtype).view(1, seq_len, *middle, -1)
+        cos = self.cos[offset:end].to(dtype=x.dtype).view(1, seq_len, *middle, -1)
+        sin = self.sin[offset:end].to(dtype=x.dtype).view(1, seq_len, *middle, -1)
         return x * cos + _rotate_half(x) * sin
