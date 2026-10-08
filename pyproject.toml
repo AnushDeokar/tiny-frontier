@@ -27,6 +27,8 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Lets tests import tiny_frontier even if the package is not installed.
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
