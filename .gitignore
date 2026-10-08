@@ -10,8 +10,10 @@ __pycache__/
 
 # Data
 data/*.bin
-data/*.json
 data/*.txt
+data/*.json
+!data/tokenizer.json
+!data/fingerprint.json
 
 # Model checkpoints
 *.pt
