@@ -1,8 +1,8 @@
 import torch
 
 from data.loader import load_tokens, get_batch
-from tiny_frontier.model.llama import LlamaModel
-from training.loss import lm_loss
+from tiny_frontier.model.model import LlamaModel
+from tiny_frontier.training.loss import lm_loss
 
 
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
