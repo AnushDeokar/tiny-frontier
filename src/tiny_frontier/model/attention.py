@@ -30,24 +30,39 @@ class KVCache:
 
 class CausalSelfAttention(nn.Module):
     
-    def __init__(self, d_model, num_heads, rope):
+    def __init__(self, d_model, num_heads, rope, n_kv_heads=None, head_dim=None):
         super().__init__()
 
-        if d_model % num_heads != 0:
+
+        if n_kv_heads is None:
+            n_kv_heads = num_heads
+        if head_dim is None:
+            if d_model % num_heads != 0:
+                raise ValueError(
+                    f"d_model ({d_model}) must be divisible by "
+                    f"num_heads ({num_heads}) when head_dim is not set"
+                )
+            head_dim = d_model // num_heads
+        if num_heads % n_kv_heads != 0:
             raise ValueError(
-                f"d_model ({d_model}) must be divisible by "
-                f"num_heads ({num_heads})"
+                f"num_heads ({num_heads}) must be divisible by "
+                f"n_kv_heads ({n_kv_heads})"
             )
 
         self.d_model = d_model
         self.num_heads = num_heads
-        self.head_dim = d_model // num_heads
+        self.n_kv_heads = n_kv_heads
+        # Grouped-query attention: each K/V head is shared by n_rep query heads.
+        self.n_rep = num_heads // n_kv_heads
+        self.head_dim = head_dim
         self.rope = rope
 
-        self.Wq = nn.Linear(d_model, d_model, bias=False)
-        self.Wk = nn.Linear(d_model, d_model, bias=False)
-        self.Wv = nn.Linear(d_model, d_model, bias=False)
-        self.Wo = nn.Linear(d_model, d_model, bias=False)
+        # head_dim can differ from d_model // num_heads (Gemma 3 does this),
+        # so the projections are sized by heads * head_dim, not d_model.
+        self.Wq = nn.Linear(d_model, num_heads * head_dim, bias=False)
+        self.Wk = nn.Linear(d_model, n_kv_heads * head_dim, bias=False)
+        self.Wv = nn.Linear(d_model, n_kv_heads * head_dim, bias=False)
+        self.Wo = nn.Linear(num_heads * head_dim, d_model, bias=False)
 
     def forward(self, x, attention_mask=None, kv_cache=None, layer_idx=0):
         B, T, C = x.shape
@@ -57,11 +72,11 @@ class CausalSelfAttention(nn.Module):
         )
 
         k = self.Wk(x).view(
-            B, T, self.num_heads, self.head_dim
+            B, T, self.n_kv_heads, self.head_dim
         )
 
         v = self.Wv(x).view(
-            B, T, self.num_heads, self.head_dim
+            B, T, self.n_kv_heads, self.head_dim
         )
 
         # RoPE is applied to the new tokens only. Cached K already has it.
@@ -76,6 +91,13 @@ class CausalSelfAttention(nn.Module):
 
         if kv_cache is not None:
             k, v = kv_cache.update(layer_idx, k, v)
+
+        # The cache stores only n_kv_heads (that's the memory saving).
+        # Expand to num_heads just for the score computation:
+        # [B, H_kv, S, D] -> [B, H_kv * n_rep, S, D]
+        if self.n_rep > 1:
+            k = k.repeat_interleave(self.n_rep, dim=1)
+            v = v.repeat_interleave(self.n_rep, dim=1)
 
         # QK^T / sqrt(d_head)
         scores = (
@@ -117,7 +139,7 @@ class CausalSelfAttention(nn.Module):
         out = out.transpose(1, 2).contiguous()
 
         # Concatenate heads
-        out = out.view(B, T, self.d_model)
+        out = out.view(B, T, self.num_heads * self.head_dim)
 
         # Wo
         out = self.Wo(out)

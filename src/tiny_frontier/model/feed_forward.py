@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 class FeedForward(nn.Module):
 
-    def __init__(self, d_model, d_ff, dropout=0.1):
+    def __init__(self, d_model, d_ff):
         super().__init__()
         self.W_gate = nn.Linear(d_model, d_ff, bias=False)
         self.W_up = nn.Linear(d_model, d_ff, bias=False)

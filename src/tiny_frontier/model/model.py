@@ -16,19 +16,36 @@ class LlamaModel(nn.Module):
         d_ff,
         n_layers,
         max_seq_len,
+        rope_max_len=8192,
+        n_kv_heads=None,
+        head_dim=None,
         tie_embeddings=True,
         init_std=0.02,
     ):
         super().__init__()
 
         self.n_layers = n_layers
+        # Training context length (what the model sees during training).
+        self.max_seq_len = max_seq_len
         self.init_std = init_std
 
         self.token_embedding = nn.Embedding(vocab_size, d_model)
-        head_dim = d_model // n_heads
-        self.rope = RotaryEmbedding(head_dim, max_seq_len)
+        if head_dim is None:
+            head_dim = d_model // n_heads
+        # The RoPE table is sized separately from the training context so the
+        # model can be evaluated on longer streams (Experiment 2 uses 4,096).
+        # cos/sin for 8,192 positions x head_dim is tiny, so this costs nothing.
+        self.rope = RotaryEmbedding(head_dim, max(max_seq_len, rope_max_len))
         self.blocks = nn.ModuleList([
-            DecoderBlock(d_model, n_heads, d_ff, self.rope, layer_idx=i)
+            DecoderBlock(
+                d_model,
+                n_heads,
+                d_ff,
+                self.rope,
+                layer_idx=i,
+                n_kv_heads=n_kv_heads,
+                head_dim=head_dim,
+            )
             for i in range(n_layers)
         ])
         self.norm = RMSNorm(d_model)
