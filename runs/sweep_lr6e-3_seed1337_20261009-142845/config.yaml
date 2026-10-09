@@ -1,0 +1,30 @@
+name: sweep_lr6e-3
+model:
+  vocab_size: 4096
+  d_model: 192
+  n_heads: 6
+  d_ff: 512
+  n_layers: 6
+  max_seq_len: 256
+  n_kv_heads: null
+  head_dim: null
+  tie_embeddings: true
+train:
+  seed: 1337
+  batch_size: 32
+  total_tokens: 10000000
+  lr: 0.006
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  eval_every: 250
+  eval_batches: 60
+  log_every: 50
+  device: auto
+  train_path: data/train.bin
+  val_path: data/val.bin
+  tokenizer_path: data/tokenizer.json
+  sample_prompt: Once upon a time
