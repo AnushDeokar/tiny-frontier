@@ -13,7 +13,7 @@ train:
   seed: 1337
   batch_size: 32
   total_tokens: 50000000   # 50M tokens ~ 6,100 steps
-  lr: 3.0e-3               # placeholder until the LR sweep picks the real value
+  lr: 5.0e-3               
   min_lr_ratio: 0.1
   warmup_steps: 200
   weight_decay: 0.1
