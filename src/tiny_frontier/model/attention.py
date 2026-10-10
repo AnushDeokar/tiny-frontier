@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from tiny_frontier.model.norms import RMSNorm
+
 
 class KVCache:
     
@@ -30,7 +32,17 @@ class KVCache:
 
 class CausalSelfAttention(nn.Module):
     
-    def __init__(self, d_model, num_heads, rope, n_kv_heads=None, head_dim=None):
+    def __init__(
+        self,
+        d_model,
+        num_heads,
+        rope,
+        n_kv_heads=None,
+        head_dim=None,
+        qk_norm=False,
+        norm_eps=1e-6,
+        norm_offset=False,
+    ):
         super().__init__()
 
 
@@ -64,6 +76,14 @@ class CausalSelfAttention(nn.Module):
         self.Wv = nn.Linear(d_model, n_kv_heads * head_dim, bias=False)
         self.Wo = nn.Linear(num_heads * head_dim, d_model, bias=False)
 
+        # QK-norm (Gemma 3): RMSNorm each query and key head vector (size
+        # head_dim) before RoPE. Keeps q.k from growing large, which keeps
+        # the softmax from becoming extremely peaked.
+        self.qk_norm = qk_norm
+        if qk_norm:
+            self.q_norm = RMSNorm(head_dim, eps=norm_eps, offset=norm_offset)
+            self.k_norm = RMSNorm(head_dim, eps=norm_eps, offset=norm_offset)
+
     def forward(self, x, attention_mask=None, kv_cache=None, layer_idx=0):
         B, T, C = x.shape
 
@@ -78,6 +98,11 @@ class CausalSelfAttention(nn.Module):
         v = self.Wv(x).view(
             B, T, self.n_kv_heads, self.head_dim
         )
+
+        # [B, T, heads, head_dim]: RMSNorm acts on the last dim, i.e. per head.
+        if self.qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
 
         # RoPE is applied to the new tokens only. Cached K already has it.
         past_len = 0 if kv_cache is None else kv_cache.length(layer_idx)

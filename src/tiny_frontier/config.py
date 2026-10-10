@@ -26,6 +26,8 @@ class ModelConfig:
     norm_eps: float = 1e-6
     norm_offset: bool = False  # RMSNorm scale is (1 + w) instead of w
     embed_scale: bool = False  # multiply embeddings by sqrt(d_model)
+    qk_norm: bool = False  # RMSNorm on each query/key head before RoPE
+    post_norm: bool = False  # extra RMSNorm on each sublayer's output ("sandwich" norm)
 
 
 @dataclass
