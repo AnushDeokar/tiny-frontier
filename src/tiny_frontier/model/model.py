@@ -21,6 +21,9 @@ class LlamaModel(nn.Module):
         head_dim=None,
         tie_embeddings=True,
         init_std=0.02,
+        norm_eps=1e-6,
+        norm_offset=False,
+        embed_scale=False,
     ):
         super().__init__()
 
@@ -28,13 +31,14 @@ class LlamaModel(nn.Module):
         # Training context length (what the model sees during training).
         self.max_seq_len = max_seq_len
         self.init_std = init_std
+        # Gemma multiplies embeddings by sqrt(d_model). With tied embeddings the
+        # same matrix is also the output layer, so its values are kept small;
+        # the multiplier brings the *input* side back up to a useful scale.
+        self.embed_multiplier = math.sqrt(d_model) if embed_scale else 1.0
 
         self.token_embedding = nn.Embedding(vocab_size, d_model)
         if head_dim is None:
             head_dim = d_model // n_heads
-        # The RoPE table is sized separately from the training context so the
-        # model can be evaluated on longer streams (Experiment 2 uses 4,096).
-        # cos/sin for 8,192 positions x head_dim is tiny, so this costs nothing.
         self.rope = RotaryEmbedding(head_dim, max(max_seq_len, rope_max_len))
         self.blocks = nn.ModuleList([
             DecoderBlock(
@@ -45,10 +49,12 @@ class LlamaModel(nn.Module):
                 layer_idx=i,
                 n_kv_heads=n_kv_heads,
                 head_dim=head_dim,
+                norm_eps=norm_eps,
+                norm_offset=norm_offset,
             )
             for i in range(n_layers)
         ])
-        self.norm = RMSNorm(d_model)
+        self.norm = RMSNorm(d_model, eps=norm_eps, offset=norm_offset)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
 
         # Tied embeddings: the output projection reuses the input embedding matrix.
@@ -67,6 +73,12 @@ class LlamaModel(nn.Module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
             nn.init.normal_(module.weight, mean=0.0, std=self.init_std)
 
+    def embed(self, input_ids):
+        x = self.token_embedding(input_ids)
+        if self.embed_multiplier != 1.0:
+            x = x * self.embed_multiplier
+        return x
+
     def num_params(self, non_embedding=False):
         n = sum(p.numel() for p in self.parameters())
         if non_embedding:
@@ -79,7 +91,7 @@ class LlamaModel(nn.Module):
         attention_mask=None,
         kv_cache=None,
     ):
-        x = self.token_embedding(input_ids)
+        x = self.embed(input_ids)
 
         for block in self.blocks:
             x = block(x, attention_mask=attention_mask, kv_cache=kv_cache)

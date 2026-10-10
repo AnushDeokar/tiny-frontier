@@ -20,6 +20,8 @@ tqdm = "*"
 pytest = "*"
 ruff = "*"
 ipykernel = "^7.4.0"
+transformers = "^5.19.0"
+huggingface-hub = "^2.2.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0"]

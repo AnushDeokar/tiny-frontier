@@ -15,11 +15,13 @@ class DecoderBlock(nn.Module):
         layer_idx=0,
         n_kv_heads=None,
         head_dim=None,
+        norm_eps=1e-6,
+        norm_offset=False,
     ):
         super().__init__()
         self.layer_idx = layer_idx
-        self.norm_1 = RMSNorm(d_model)
-        self.norm_2 = RMSNorm(d_model)
+        self.norm_1 = RMSNorm(d_model, eps=norm_eps, offset=norm_offset)
+        self.norm_2 = RMSNorm(d_model, eps=norm_eps, offset=norm_offset)
         self.attn = CausalSelfAttention(
             d_model,
             n_heads,

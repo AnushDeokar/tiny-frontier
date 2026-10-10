@@ -22,6 +22,10 @@ class ModelConfig:
     n_kv_heads: int | None = None  # None = same as n_heads (plain multi-head attention)
     head_dim: int | None = None  # None = d_model // n_heads
     tie_embeddings: bool = True
+    # Gemma-style options (defaults = the control model, unchanged).
+    norm_eps: float = 1e-6
+    norm_offset: bool = False  # RMSNorm scale is (1 + w) instead of w
+    embed_scale: bool = False  # multiply embeddings by sqrt(d_model)
 
 
 @dataclass
