@@ -1,0 +1,7 @@
+prompt,tokens,max_abs_logit_diff,top1_agreement,greedy_30_tokens
+The capital of France is,6,4.10e-05,1.0000,identical
+"Once upon a time, a little dragon",9,4.96e-05,1.0000,identical
+def fibonacci(n):,7,6.91e-05,1.0000,identical
+Water boils at a temperature of,7,6.39e-05,1.0000,identical
+The three primary colors are,6,5.82e-05,1.0000,identical
+"<model card, first 800 tokens>",800,1.81e-04,1.0000,-
