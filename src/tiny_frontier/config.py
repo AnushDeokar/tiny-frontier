@@ -28,6 +28,7 @@ class ModelConfig:
     embed_scale: bool = False  # multiply embeddings by sqrt(d_model)
     qk_norm: bool = False  # RMSNorm on each query/key head before RoPE
     post_norm: bool = False  # extra RMSNorm on each sublayer's output ("sandwich" norm)
+    mlp_activation: str = "silu"  # "silu" = SwiGLU (control), "gelu_tanh" = GeGLU (Gemma)
 
 
 @dataclass

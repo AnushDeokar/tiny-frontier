@@ -26,6 +26,7 @@ class LlamaModel(nn.Module):
         embed_scale=False,
         qk_norm=False,
         post_norm=False,
+        mlp_activation="silu",
     ):
         super().__init__()
 
@@ -55,6 +56,7 @@ class LlamaModel(nn.Module):
                 norm_offset=norm_offset,
                 qk_norm=qk_norm,
                 post_norm=post_norm,
+                mlp_activation=mlp_activation,
             )
             for i in range(n_layers)
         ])

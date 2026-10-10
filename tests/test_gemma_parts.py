@@ -71,6 +71,7 @@ def test_flags_off_keep_the_control_unchanged():
     for block in model.blocks:
         assert not block.post_norm and not hasattr(block, "post_attn_norm")
         assert not block.attn.qk_norm and not hasattr(block.attn, "q_norm")
+        assert block.ff.activation == "silu"
 
 
 def test_qk_norm_makes_attention_ignore_the_size_of_q_and_k():
@@ -139,3 +140,25 @@ def test_gemma_270m_shape_has_exactly_its_parameter_count():
             post_norm=True,
         )
     assert model.num_params() == 268_098_176
+
+
+def test_geglu_matches_gemma_mlp():
+    from transformers import Gemma3TextConfig
+
+    from tiny_frontier.model.feed_forward import FeedForward
+
+    ours = FeedForward(32, 64, activation="gelu_tanh")
+    ref = hf.Gemma3MLP(Gemma3TextConfig(hidden_size=32, intermediate_size=64, hidden_activation="gelu_pytorch_tanh"))
+    with torch.no_grad():
+        ref.gate_proj.weight.copy_(ours.W_gate.weight)
+        ref.up_proj.weight.copy_(ours.W_up.weight)
+        ref.down_proj.weight.copy_(ours.W_down.weight)
+    x = torch.randn(2, 5, 32)
+    torch.testing.assert_close(ours(x), ref(x))
+
+
+def test_unknown_activation_is_rejected():
+    from tiny_frontier.model.feed_forward import FeedForward
+
+    with pytest.raises(ValueError, match="relu"):
+        FeedForward(32, 64, activation="relu")
