@@ -7,6 +7,24 @@ from tiny_frontier.model.rope import RotaryEmbedding
 from tiny_frontier.model.block import DecoderBlock
 
 
+def expand_layer_pattern(pattern, n_layers):
+    """'LLLLLG' -> ['local', 'local', 'local', 'local', 'local', 'global', ...].
+
+    L = local (sliding-window) layer, G = global layer. A pattern shorter than
+    n_layers repeats (Gemma 3: 'LLLLLG' x 3 = 18 layers). None = all global,
+    which is the control.
+    """
+    if pattern is None:
+        return ["global"] * n_layers
+    pattern = pattern.upper()
+    if not pattern or set(pattern) - {"L", "G"}:
+        raise ValueError(f"layer_pattern must contain only L and G, got {pattern!r}")
+    if n_layers % len(pattern) != 0:
+        raise ValueError(f"layer_pattern {pattern!r} does not tile {n_layers} layers")
+    full = pattern * (n_layers // len(pattern))
+    return ["local" if c == "L" else "global" for c in full]
+
+
 class LlamaModel(nn.Module):
     def __init__(
         self,
@@ -27,6 +45,10 @@ class LlamaModel(nn.Module):
         qk_norm=False,
         post_norm=False,
         mlp_activation="silu",
+        layer_pattern=None,
+        window=None,
+        rope_base=10000.0,
+        rope_base_local=None,
     ):
         super().__init__()
 
@@ -42,13 +64,27 @@ class LlamaModel(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, d_model)
         if head_dim is None:
             head_dim = d_model // n_heads
-        self.rope = RotaryEmbedding(head_dim, max(max_seq_len, rope_max_len))
+        self.layer_types = expand_layer_pattern(layer_pattern, n_layers)
+        if "local" in self.layer_types and window is None:
+            raise ValueError("local layers need a window size")
+        self.window = window
+
+        rope_len = max(max_seq_len, rope_max_len)
+        self.rope = RotaryEmbedding(head_dim, rope_len, base=rope_base)
+        # Gemma 3: local layers use a smaller RoPE base (faster rotations, good
+        # at telling apart nearby positions); global layers a much larger one
+        # (slow rotations, so far-apart positions stay distinguishable).
+        if rope_base_local is None or rope_base_local == rope_base:
+            self.rope_local = self.rope
+        else:
+            self.rope_local = RotaryEmbedding(head_dim, rope_len, base=rope_base_local)
+
         self.blocks = nn.ModuleList([
             DecoderBlock(
                 d_model,
                 n_heads,
                 d_ff,
-                self.rope,
+                self.rope_local if self.layer_types[i] == "local" else self.rope,
                 layer_idx=i,
                 n_kv_heads=n_kv_heads,
                 head_dim=head_dim,
@@ -57,6 +93,7 @@ class LlamaModel(nn.Module):
                 qk_norm=qk_norm,
                 post_norm=post_norm,
                 mlp_activation=mlp_activation,
+                window=window if self.layer_types[i] == "local" else None,
             )
             for i in range(n_layers)
         ])

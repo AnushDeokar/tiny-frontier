@@ -20,6 +20,7 @@ class DecoderBlock(nn.Module):
         qk_norm=False,
         post_norm=False,
         mlp_activation="silu",
+        window=None,
     ):
         super().__init__()
         self.layer_idx = layer_idx
@@ -39,6 +40,7 @@ class DecoderBlock(nn.Module):
             qk_norm=qk_norm,
             norm_eps=norm_eps,
             norm_offset=norm_offset,
+            window=window,
         )
         self.ff = FeedForward(d_model, d_ff, activation=mlp_activation)
 

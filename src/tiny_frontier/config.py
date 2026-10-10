@@ -29,6 +29,10 @@ class ModelConfig:
     qk_norm: bool = False  # RMSNorm on each query/key head before RoPE
     post_norm: bool = False  # extra RMSNorm on each sublayer's output ("sandwich" norm)
     mlp_activation: str = "silu"  # "silu" = SwiGLU (control), "gelu_tanh" = GeGLU (Gemma)
+    layer_pattern: str | None = None  # e.g. "LLLLLG": L = sliding window, G = global; repeats
+    window: int | None = None  # tokens a local layer can see (itself included)
+    rope_base: float = 10000.0  # RoPE base for global layers
+    rope_base_local: float | None = None  # RoPE base for local layers; None = same as rope_base
 
 
 @dataclass
@@ -86,7 +90,7 @@ def _build(cls, raw, section):
     for key, value in raw.items():
         # YAML gotcha: PyYAML reads `3e-3` as a *string* (it wants `3.0e-3`).
         # Convert so either spelling works.
-        if known[key].type is float and isinstance(value, (str, int)):
+        if known[key].type in (float, float | None) and isinstance(value, (str, int)):
             value = float(value)
         values[key] = value
     return cls(**values)

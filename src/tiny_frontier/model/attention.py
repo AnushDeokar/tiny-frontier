@@ -42,8 +42,13 @@ class CausalSelfAttention(nn.Module):
         qk_norm=False,
         norm_eps=1e-6,
         norm_offset=False,
+        window=None,
     ):
         super().__init__()
+
+        # None = global attention (sees every earlier token).
+        # An int W = local attention (sees only the last W tokens).
+        self.window = window
 
 
         if n_kv_heads is None:
@@ -129,22 +134,19 @@ class CausalSelfAttention(nn.Module):
             q @ k.transpose(-2, -1)
         ) / (self.head_dim ** 0.5)
 
-        # Query i attends to keys through past_len + i.
+        # Absolute positions. The cache holds keys 0..k_len-1 and the T new
+        # queries are the last T of those positions.
         k_len = k.shape[-2]
-        causal_mask = torch.triu(
-            torch.ones(
-                T,
-                k_len,
-                device=x.device,
-                dtype=torch.bool,
-            ),
-            diagonal=k_len - T + 1,
-        )
-
-        scores = scores.masked_fill(
-            causal_mask,
-            float("-inf"),
-        )
+        k_pos = torch.arange(k_len, device=x.device)
+        q_pos = k_pos[k_len - T :]
+        # True = blocked. Causal: a query may not look at later keys.
+        blocked = k_pos[None, :] > q_pos[:, None]
+        if self.window is not None:
+            # Sliding window: query i sees only keys i-W+1 .. i (the last W
+            # tokens, itself included). Same rule as Hugging Face's
+            # `kv_idx > q_idx - sliding_window`.
+            blocked = blocked | (k_pos[None, :] <= q_pos[:, None] - self.window)
+        scores = scores.masked_fill(blocked, float("-inf"))
 
         if attention_mask is not None:
             scores = scores.masked_fill(
