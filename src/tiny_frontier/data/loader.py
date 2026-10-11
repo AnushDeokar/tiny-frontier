@@ -9,7 +9,7 @@ def load_tokens(path):
 
 
 def get_batch(tokens, batch_size, block_size, generator=None):
-    """Random training windows. y is x shifted by one: predict the next token.
+    """Random training chunks. y is x shifted by one: predict the next token.
 
     `generator` gives the data its own random stream, so the batch order
     depends only on the seed, not on anything else that draws random numbers.
@@ -22,7 +22,7 @@ def get_batch(tokens, batch_size, block_size, generator=None):
 
 
 def iter_eval_batches(tokens, batch_size, block_size, n_batches):
-    """Fixed, non-overlapping windows from the start of the split.
+    """Fixed, non-overlapping chunks from the start of the split.
 
     Unlike get_batch this is deterministic: every evaluation, in every run,
     scores exactly the same tokens. That is what makes val losses comparable

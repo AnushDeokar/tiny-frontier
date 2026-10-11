@@ -30,6 +30,7 @@ runs/*/*
 !runs/*/log.csv
 !runs/*/sample.txt
 !runs/*/git_commit.txt
+!runs/*/loss_by_position.csv
 
 # OS
 .DS_Store

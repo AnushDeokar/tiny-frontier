@@ -15,6 +15,7 @@ import torch
 
 from tiny_frontier.config import load_config
 from tiny_frontier.data.loader import get_batch, iter_eval_batches, load_tokens
+from tiny_frontier.evaluation import loss_by_position, max_eval_batches
 from tiny_frontier.generate import generate
 from tiny_frontier.model.model import LlamaModel
 from tiny_frontier.run_folder import RunFolder
@@ -210,6 +211,12 @@ def train(cfg, run=None):
         run.save_summary(summary)
         run.save_plot(history)
         run.save_model(model)
+        # Loss at each position, over the *whole* val split (~3,900 chunks)
+        # rather than the 1,920-chunk slice used for val_loss: one position
+        # gets 1/256 of the data, so it needs every chunk it can get.
+        n = max_eval_batches(val_tokens, t.batch_size, cfg.model.max_seq_len)
+        by_pos = loss_by_position(model, val_tokens, t.batch_size, cfg.model.max_seq_len, n, device)
+        run.save_loss_by_position(by_pos)
         print(f"saved to {run.path}")
 
     return model, history, summary
@@ -223,6 +230,8 @@ def parse_args(argv=None):
     p.add_argument("--lr", type=float)
     p.add_argument("--total-tokens", type=int)
     p.add_argument("--name")
+    p.add_argument("--pattern", help='layer pattern, e.g. LLLLLL or LLGLLG (L = local, G = global)')
+    p.add_argument("--window", type=int, help="tokens a local layer can see")
     p.add_argument("--no-save", action="store_true", help="don't create a run folder")
     return p.parse_args(argv)
 
@@ -236,8 +245,15 @@ def main(argv=None):
         cfg.train.lr = args.lr
     if args.total_tokens is not None:
         cfg.train.total_tokens = args.total_tokens
+    if args.pattern is not None:
+        cfg.model.layer_pattern = args.pattern
+    if args.window is not None:
+        cfg.model.window = args.window
     if args.name is not None:
         cfg.name = args.name
+    elif args.pattern is not None:
+        # e.g. "control_LLLLLL_w32", so the run folder says what changed.
+        cfg.name = f"{cfg.name}_{args.pattern}_w{cfg.model.window}"
     run = None if args.no_save else RunFolder(cfg)
     return train(cfg, run)
 

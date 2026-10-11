@@ -6,6 +6,7 @@
         data_fingerprint.json hashes of train.bin / val.bin
         log.csv               one row per evaluation, written as training goes
         sample.txt            text generated from a fixed prompt
+        loss_by_position.csv  mean val loss at each position of the context
         summary.json          headline numbers
         loss.png              train and val loss curves
         model.pt              final weights (gitignored; Experiment 2 re-uses them)
@@ -36,6 +37,14 @@ def git_commit():
         return sha + ("-dirty" if dirty else "")
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+
+
+def write_loss_by_position(run_dir, losses):
+    with open(Path(run_dir) / "loss_by_position.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["position", "loss"])
+        for pos, loss in enumerate(losses.tolist()):
+            writer.writerow([pos, round(loss, 5)])
 
 
 class RunFolder:
@@ -71,6 +80,9 @@ class RunFolder:
 
     def save_sample(self, text):
         (self.path / "sample.txt").write_text(text + "\n")
+
+    def save_loss_by_position(self, losses):
+        write_loss_by_position(self.path, losses)
 
     def save_model(self, model):
         torch.save(model.state_dict(), self.path / "model.pt")
