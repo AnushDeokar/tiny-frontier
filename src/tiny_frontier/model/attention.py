@@ -5,29 +5,64 @@ from tiny_frontier.model.norms import RMSNorm
 
 
 class KVCache:
-    
-    def __init__(self, n_layers):
+    """Keys and values of past tokens, one entry per layer.
+
+    max_tokens (one value per layer, or None) turns a layer's cache into a
+    *rolling* cache: after each step only its last `max_tokens` keys/values are
+    kept. A local layer with window W never looks further back than W tokens,
+    so anything older can be thrown away without changing a single output.
+    That is where sliding-window attention actually saves memory.
+
+    Because old entries get dropped, "how many entries are stored" and "how
+    many tokens have been processed" are no longer the same number:
+      seen[i]     tokens processed so far = absolute position of the next token
+                  (RoPE and the mask need this)
+      stored(i)   entries currently held (what costs memory)
+    """
+
+    def __init__(self, n_layers, max_tokens=None):
         self.k = [None] * n_layers
         self.v = [None] * n_layers
+        self.seen = [0] * n_layers
+        self.max_tokens = list(max_tokens) if max_tokens is not None else [None] * n_layers
 
     def length(self, layer_idx):
-        if self.k[layer_idx] is None:
-            return 0
-        return self.k[layer_idx].shape[-2]
+        """Tokens processed so far (absolute position of the next token)."""
+        return self.seen[layer_idx]
+
+    def stored(self, layer_idx):
+        k = self.k[layer_idx]
+        return 0 if k is None else k.shape[-2]
 
     def update(self, layer_idx, k, v):
-        if self.k[layer_idx] is None:
-            self.k[layer_idx] = k
-            self.v[layer_idx] = v
+        """Add the new tokens' k, v. Returns (all keys, all values, position of key 0).
+
+        Attention for this step uses everything returned, *then* the cache is
+        trimmed. Trimming first would be wrong when several new tokens arrive
+        at once (a prompt): the earliest of them still needs keys from before.
+        """
+        old_k, old_v = self.k[layer_idx], self.v[layer_idx]
+        # Position of the oldest key still stored = tokens seen - tokens stored.
+        k_start = self.seen[layer_idx] - self.stored(layer_idx)
+        self.seen[layer_idx] += k.shape[-2]  # T new tokens
+        if old_k is not None:
+            k = torch.cat([old_k, k], dim=-2)
+            v = torch.cat([old_v, v], dim=-2)
+
+        keep = self.max_tokens[layer_idx]
+        if keep is not None and k.shape[-2] > keep:
+            self.k[layer_idx], self.v[layer_idx] = k[..., -keep:, :], v[..., -keep:, :]
         else:
-            self.k[layer_idx] = torch.cat([self.k[layer_idx], k], dim=-2)
-            self.v[layer_idx] = torch.cat([self.v[layer_idx], v], dim=-2)
-        return self.k[layer_idx], self.v[layer_idx]
+            self.k[layer_idx], self.v[layer_idx] = k, v
+        return k, v, k_start
+
+    def nbytes(self):
+        """Memory held by all stored keys and values right now."""
+        return sum(t.numel() * t.element_size() for t in self.k + self.v if t is not None)
 
     def reset(self):
-        for i in range(len(self.k)):
-            self.k[i] = None
-            self.v[i] = None
+        n = len(self.k)
+        self.k, self.v, self.seen = [None] * n, [None] * n, [0] * n
 
 
 class CausalSelfAttention(nn.Module):
@@ -119,8 +154,9 @@ class CausalSelfAttention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
+        k_start = 0  # absolute position of the first key we attend over
         if kv_cache is not None:
-            k, v = kv_cache.update(layer_idx, k, v)
+            k, v, k_start = kv_cache.update(layer_idx, k, v)
 
         # The cache stores only n_kv_heads (that's the memory saving).
         # Expand to num_heads just for the score computation:
@@ -134,11 +170,11 @@ class CausalSelfAttention(nn.Module):
             q @ k.transpose(-2, -1)
         ) / (self.head_dim ** 0.5)
 
-        # Absolute positions. The cache holds keys 0..k_len-1 and the T new
-        # queries are the last T of those positions.
+        # Absolute positions. Keys run from k_start (0 unless a rolling cache
+        # dropped old ones) to the newest token; the T queries are the newest T.
         k_len = k.shape[-2]
-        k_pos = torch.arange(k_len, device=x.device)
-        q_pos = k_pos[k_len - T :]
+        k_pos = k_start + torch.arange(k_len, device=x.device)
+        q_pos = past_len + torch.arange(T, device=x.device)
         # True = blocked. Causal: a query may not look at later keys.
         blocked = k_pos[None, :] > q_pos[:, None]
         if self.window is not None:

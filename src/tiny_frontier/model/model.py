@@ -116,6 +116,18 @@ class LlamaModel(nn.Module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
             nn.init.normal_(module.weight, mean=0.0, std=self.init_std)
 
+    def new_cache(self, rolling=True):
+        """An empty KV cache for generation.
+
+        rolling=True: local layers keep only their last `window` entries
+        (exact same outputs, bounded memory). rolling=False: every layer
+        keeps everything (what the code did before).
+        """
+        from tiny_frontier.model.attention import KVCache
+
+        keep = [self.window if (rolling and t == "local") else None for t in self.layer_types]
+        return KVCache(len(self.blocks), max_tokens=keep)
+
     def embed(self, input_ids):
         x = self.token_embedding(input_ids)
         if self.embed_multiplier != 1.0:

@@ -1,7 +1,5 @@
 import torch
 
-from tiny_frontier.model.attention import KVCache
-
 
 @torch.no_grad()
 def generate(
@@ -13,6 +11,7 @@ def generate(
     eos_id=None,
     use_cache=True,
     generator=None,
+    kv_cache=None,
 ):
     """Autoregressive generation: predict a token, append it, repeat.
 
@@ -29,7 +28,9 @@ def generate(
     was_training = model.training
     model.eval()
 
-    cache = KVCache(len(model.blocks)) if use_cache else None
+    # A rolling cache by default: local layers keep only their last W
+    # entries. Pass kv_cache to inspect it afterwards (e.g. its memory).
+    cache = (kv_cache if kv_cache is not None else model.new_cache()) if use_cache else None
     ids = input_ids
     next_input = input_ids  # first step: the whole prompt
 
