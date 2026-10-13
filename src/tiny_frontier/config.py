@@ -92,6 +92,15 @@ def _build(cls, raw, section):
         # Convert so either spelling works.
         if known[key].type in (float, float | None) and isinstance(value, (str, int)):
             value = float(value)
+        # A bool must really be true/false. Without this check a typo such as
+        # `qk_norm: false§` is read as the *string* "false§", which Python
+        # treats as True, silently turning the feature on.
+        if known[key].type is bool and not isinstance(value, bool):
+            raise ValueError(f"'{section}.{key}' must be true or false, got {value!r}")
+        if known[key].type in (int, int | None) and value is not None and (
+            isinstance(value, bool) or not isinstance(value, int)
+        ):
+            raise ValueError(f"'{section}.{key}' must be a whole number, got {value!r}")
         values[key] = value
     return cls(**values)
 

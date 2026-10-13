@@ -40,6 +40,9 @@ EXP1_VARIANTS = [
     ("LLLLLL", 64),
     ("LLLLLL", 128),
     ("LLGLLG", 32),
+    # Added after the first results: Gemma's 5 local : 1 global ratio. Compared
+    # with LLGLLG W=32 the only change is 1 global layer instead of 2.
+    ("LLLLLG", 32),
 ]
 # Noise floor from the control's 3 seeds was 0.0087 (max - min). A gap under
 # NO_EFFECT is indistinguishable from seed noise; over CLEAR_EFFECT it can't be

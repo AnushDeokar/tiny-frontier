@@ -65,3 +65,12 @@ def test_train_batches_depend_only_on_seed():
     torch.rand(100)  # unrelated random draw must not change the batch order
     x2, _ = get_batch(tokens, 4, 16, generator=torch.Generator().manual_seed(1))
     assert torch.equal(x1, x2)
+
+
+@pytest.mark.parametrize("bad", ["qk_norm: false§", "qk_norm: yes please", "n_layers: 6.5", "window: \"32\""])
+def test_config_rejects_wrong_types(tmp_path, bad):
+    # A stray character once turned `qk_norm: false` into a truthy string.
+    path = tmp_path / "bad.yaml"
+    path.write_text(f"model:\n  {bad}\n")
+    with pytest.raises(ValueError):
+        load_config(path)

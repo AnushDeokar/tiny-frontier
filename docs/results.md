@@ -248,4 +248,141 @@ traps that approach caught or avoided:
 
 ## Experiment 1: local/global attention
 
-_Not started._
+**Question:** how small can attention windows get before loss suffers, and
+how much KV-cache memory does that save?
+
+**Setup.** The control (all 6 layers global) with one change per variant:
+a layer pattern (`L` = local/sliding-window, `G` = global) and a window size
+W. Everything else identical: data, LR 5e-3 (tuned for the control), 50M
+tokens, fixed val slice. Seed 1337 first; extra seeds only where the gap fell
+between 0.01 and 0.03 (the control's seed spread is 0.0087).
+
+### Result
+
+| Variant | Global layers | Seeds | Val loss | vs control | KV @ 256 | KV @ 4,096 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `GGGGGG` (control) | 6 | 3 | 1.8798 (1.8743–1.8830) | — | 2.25 MB | 36.0 MB |
+| `LLLLLL` W=128 | 0 | 1 | 1.8806 | +0.001 | 1.13 MB | 1.13 MB |
+| `LLLLLL` W=64 | 0 | 3 | 1.8951 (1.8870–1.9008) | **+0.015** | 0.56 MB | 0.56 MB |
+| `LLLLLL` W=32 | 0 | 1 | 1.9340 | **+0.054** | 0.28 MB | 0.28 MB |
+| `LLLLLL` W=16 | 0 | 1 | 1.9969 | **+0.117** | 0.14 MB | 0.14 MB |
+| `LLGLLG` W=32 | 2 | 3 | **1.8596** (1.8569–1.8629) | **−0.020** | 0.94 MB | 12.2 MB |
+| `LLLLLG` W=32 | 1 | 1 | **1.8613** | **−0.019** | 0.61 MB | **6.2 MB** |
+
+KV = fp32 cache for one sequence; measured from the rolling cache during
+generation and equal to the formula to the byte
+(`results/exp1_generation.csv`).
+
+![Val loss vs window](../results/exp1_loss_vs_window.png)
+![Memory vs quality](../results/exp1_memory_tradeoff.png)
+
+### Findings
+
+1. **All-local: loss rises steadily as the window shrinks.** W=128 matches
+   the control; W=64 is slightly but consistently worse (all 3 seeds above
+   all 3 control seeds); W=32 and W=16 are clearly worse.
+2. **Hybrids beat full attention.** `LLGLLG` W=32: all 3 seeds better than
+   all 3 control seeds (the worst hybrid beats the best control by 0.011);
+   −0.020 nats with 3× less KV memory at 4,096 tokens. Since the LR was tuned
+   for the control and reused, the setup favours the control, not the hybrid.
+3. **One global layer is enough (single seed).** `LLLLLG` (Gemma 3's 5:1
+   ratio) lands within 0.002 of `LLGLLG` at half its long-context memory
+   (5.8× less than the control). Adding the 1st global layer to an all-local
+   W=32 model moves the loss by 0.073; the 2nd adds ~0.002.
+4. **Once a model has a global layer, the window barely matters for memory.**
+   At 4,096 tokens the global layer's cache dominates: `LLLLLG` at W=16 would
+   need 6.1 MB vs 6.2 MB at W=32. The number of global layers sets the cost;
+   this is why Gemma can afford a 512-token window.
+
+### Mechanism: where windows help and hurt
+
+Loss difference to the control by tokens of context (mean over seeds;
+`results/exp1_by_position.csv`):
+
+| Variant | 0–7 | 8–15 | 16–31 | 32–63 | 64–127 | 128–255 |
+| --- | --- | --- | --- | --- | --- | --- |
+| W=16 | −0.031 | −0.037 | +0.002 | +0.068 | +0.132 | +0.157 |
+| W=32 | −0.024 | −0.023 | −0.015 | +0.019 | +0.059 | +0.080 |
+| W=64 | −0.006 | −0.014 | −0.015 | −0.011 | +0.013 | +0.031 |
+| W=128 | −0.009 | −0.005 | −0.005 | −0.005 | −0.002 | +0.003 |
+| `LLGLLG` W=32 | −0.005 | −0.019 | −0.020 | −0.021 | −0.021 | −0.022 |
+| `LLLLLG` W=32 | −0.010 | −0.018 | −0.020 | −0.020 | −0.019 | −0.020 |
+
+![Loss by position](../results/exp1_loss_by_position.png)
+
+- **Local attention has two opposite effects.** Every all-local model is
+  *better* than the control with little context and *worse* with a lot.
+  Restricting attention to nearby tokens appears to make short-range patterns
+  easier to learn; it costs whatever lies out of reach.
+- **The penalty starts after ~2W, not W.** Six stacked local layers relay
+  information backwards (receptive field 6·(W−1)), but relaying is lossy, so
+  the penalty grows with distance.
+- **The hybrids keep the short-range advantage at every distance:** the
+  global layer(s) cover what the local layers can't reach.
+- Context itself: the control's loss falls from 4.0 with no context to ~1.81
+  with 128+ tokens, but almost all of that gain comes from the first ~64
+  tokens. TinyStories is fairly local.
+
+### Is the hybrid advantage just faster learning?
+
+![Gap over training](../results/exp1_gap_over_training.png)
+
+The hybrids' lead is largest early (−0.06 at 2M tokens), shrinks over the
+first ~20M tokens, then holds steady at −0.020 to −0.021 for the last 30M.
+All-local models start ahead too, then fall behind once the control learns
+to use long-range context (from ~4M tokens on). So part of the advantage is
+faster learning, but at this budget a stable gap remains. Whether it survives
+much longer training is untested.
+
+### Generation benchmark
+
+Measured KV memory equals the formula exactly for every variant.
+
+Tokens/sec while generating (greedy, rolling cache, M4 GPU), benchmarked in
+reverse order (control last) to rule out GPU warm-up effects:
+
+| Variant | 256 tokens | 4,096 tokens |
+| --- | --- | --- |
+| `GGGGGG` (control) | 301 | 310 |
+| `LLGLLG` W=32 | 302 | 291 |
+| `LLLLLL` W=64 | 528 | 700 |
+| `LLLLLL` W=16 | 623 | 719 |
+
+- **All-local models generate ~2.3× faster; any global layer brings the
+  speed back down to the control's.** The order didn't matter (same result
+  with the control first or last).
+- **The speed does not depend on context length** (the control is as fast at
+  4,096 tokens as at 256), so the cost is not the attention arithmetic.
+- **Likely cause (hypothesis, untested):** a global layer's cache grows by one
+  entry every step, so its tensors have a new shape each step. Apple's GPU
+  backend prepares (and caches) work per tensor shape, so a new shape every
+  step defeats that caching. A rolling local cache stops changing shape once
+  it holds W entries. Production systems avoid this with a *pre-allocated*
+  ("static") KV cache of fixed size. Testing that is out of scope here.
+- So at this scale, speed differences come from the implementation, not from
+  attention cost. The architectural benefit measured here is memory.
+
+### Predictions vs outcome
+
+| Prediction (made before running) | Outcome |
+| --- | --- |
+| W=64 and W=128 ≈ control | W=128 ✓; W=64 slightly worse (+0.015) |
+| W=16 and W=32 clearly worse | ✓ |
+| `LLGLLG` W=32 recovers most of the gap | Exceeded: beats the control |
+| Risk: TinyStories too local to show anything | Did not happen |
+
+### Caveats
+
+- One dataset (TinyStories), 256-token context, 3.4M parameters, 50M tokens.
+  "Hybrid beats full attention" holds in this setting, not in general.
+- W=16, W=32, W=128 and `LLLLLG` are single-seed. Their gaps (except
+  `LLLLLG`) are far outside the noise floor; `LLLLLG`'s matches `LLGLLG`'s
+  but is not confirmed by extra seeds.
+- Training speed is not reported: masked attention computes the full matrix,
+  so windows don't make training faster here, and several runs were slowed
+  2–3× by the machine (power/heat; later runs at the same code ran at normal
+  speed).
+- Exp 1 runs were started with uncommitted changes (`-dirty` in
+  `git_commit.txt`): the sweep mode and the rolling cache. Neither changes
+  training (without a cache the attention computation is identical), and the
+  regression test confirms the control still gives its recorded loss.

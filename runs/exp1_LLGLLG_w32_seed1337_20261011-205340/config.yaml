@@ -12,7 +12,7 @@ model:
   norm_eps: 1.0e-06
   norm_offset: false
   embed_scale: false
-  qk_norm: false§
+  qk_norm: false
   post_norm: false
   mlp_activation: silu
   layer_pattern: LLGLLG
