@@ -1,4 +1,4 @@
-.PHONY: install test lint format train sweep-lr seeds clean
+.PHONY: install test lint format train sweep-lr seeds exp1 clean
 
 install:
 	poetry install
@@ -21,6 +21,10 @@ sweep-lr:
 
 seeds:
 	caffeinate -i poetry run python scripts/sweep.py seeds
+
+# Experiment 1: the 5 local/global variants, seed 1337 (~2.3 h).
+exp1:
+	caffeinate -i poetry run python scripts/sweep.py exp1
 
 clean:
 	rm -rf .pytest_cache
