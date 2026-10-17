@@ -188,6 +188,10 @@ class CausalSelfAttention(nn.Module):
         # Learned attention sink (Experiment 2): one learnable logit per head.
         # Starts at 0, i.e. the sink begins as "worth one average token".
         self.learned_sink = learned_sink
+        # Set capture = True to keep the last attention weights for analysis
+        # (Experiment 2: how much attention lands on the first token).
+        self.capture = False
+        self.last_weights = None
         if learned_sink:
             self.sink_logit = nn.Parameter(torch.zeros(num_heads))
 
@@ -280,6 +284,9 @@ class CausalSelfAttention(nn.Module):
                 scores,
                 dim=-1,
             )
+
+        if self.capture:
+            self.last_weights = attention_weights.detach()
 
         # Attention(Q,K,V)
         out = attention_weights @ v

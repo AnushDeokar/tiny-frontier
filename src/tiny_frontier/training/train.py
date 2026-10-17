@@ -15,6 +15,7 @@ import torch
 
 from tiny_frontier.config import load_config
 from tiny_frontier.data.loader import get_batch, iter_eval_batches, load_tokens
+from tiny_frontier.data.tokenizer import BOS_ID
 from tiny_frontier.evaluation import loss_by_position, max_eval_batches
 from tiny_frontier.generate import generate
 from tiny_frontier.model.model import LlamaModel
@@ -52,6 +53,11 @@ def memory_mb(device):
     return rss / 2**20 if sys.platform == "darwin" else rss / 2**10
 
 
+def bos_id(cfg):
+    """Token id prepended to every chunk, or None (the control: no BOS)."""
+    return BOS_ID if cfg.train.bos else None
+
+
 def build_model(model_cfg):
     return LlamaModel(**asdict(model_cfg))
 
@@ -62,7 +68,7 @@ def evaluate(model, val_tokens, cfg, device):
     model.eval()
     losses = []
     for x, y in iter_eval_batches(
-        val_tokens, cfg.train.batch_size, cfg.model.max_seq_len, cfg.train.eval_batches
+        val_tokens, cfg.train.batch_size, cfg.model.max_seq_len, cfg.train.eval_batches, bos_id=bos_id(cfg)
     ):
         x, y = x.to(device), y.to(device)
         losses.append(lm_loss(model(x), y).item())
@@ -74,7 +80,10 @@ def write_sample(model, cfg, device, max_new_tokens=200):
     from tiny_frontier.data.tokenizer import EOS_TOKEN, load_tokenizer
 
     tokenizer = load_tokenizer(cfg.train.tokenizer_path)
-    prompt = torch.tensor([tokenizer.encode(cfg.train.sample_prompt).ids], device=device)
+    ids = tokenizer.encode(cfg.train.sample_prompt).ids
+    if cfg.train.bos:
+        ids = [BOS_ID] + ids  # a BOS model always saw <s> first
+    prompt = torch.tensor([ids], device=device)
     out = generate(
         model,
         prompt,
@@ -84,7 +93,7 @@ def write_sample(model, cfg, device, max_new_tokens=200):
         eos_id=tokenizer.token_to_id(EOS_TOKEN),
         generator=torch.Generator().manual_seed(0),  # same sample every time for the same weights
     )
-    return tokenizer.decode(out[0].tolist())
+    return tokenizer.decode(out[0].tolist())  # decode() skips special tokens like <s>
 
 
 def train(cfg, run=None):
@@ -128,7 +137,7 @@ def train(cfg, run=None):
         for group in optimizer.param_groups:
             group["lr"] = lr
 
-        x, y = get_batch(train_tokens, t.batch_size, cfg.model.max_seq_len, generator=data_gen)
+        x, y = get_batch(train_tokens, t.batch_size, cfg.model.max_seq_len, generator=data_gen, bos_id=bos_id(cfg))
         x, y = x.to(device), y.to(device)
 
         loss = lm_loss(model(x), y)
@@ -215,7 +224,7 @@ def train(cfg, run=None):
         # rather than the 1,920-chunk slice used for val_loss: one position
         # gets 1/256 of the data, so it needs every chunk it can get.
         n = max_eval_batches(val_tokens, t.batch_size, cfg.model.max_seq_len)
-        by_pos = loss_by_position(model, val_tokens, t.batch_size, cfg.model.max_seq_len, n, device)
+        by_pos = loss_by_position(model, val_tokens, t.batch_size, cfg.model.max_seq_len, n, device, bos_id=bos_id(cfg))
         run.save_loss_by_position(by_pos)
         print(f"saved to {run.path}")
 
@@ -234,6 +243,7 @@ def parse_args(argv=None):
     p.add_argument("--window", type=int, help="tokens a local layer can see")
     # Experiment 2.
     p.add_argument("--learned-sink", action="store_true", help="add a learned attention sink per head")
+    p.add_argument("--bos", action="store_true", help="start every chunk with <s> (fixed token at position 0)")
     p.add_argument("--no-save", action="store_true", help="don't create a run folder")
     return p.parse_args(argv)
 
@@ -253,6 +263,8 @@ def main(argv=None):
         cfg.model.window = args.window
     if args.learned_sink:
         cfg.model.learned_sink = True
+    if args.bos:
+        cfg.train.bos = True
     if args.name is not None:
         cfg.name = args.name
     else:
@@ -262,6 +274,8 @@ def main(argv=None):
             cfg.name = f"{cfg.name}_{args.pattern}_w{cfg.model.window}"
         if args.learned_sink:
             cfg.name = f"{cfg.name}_sink"
+        if args.bos:
+            cfg.name = f"{cfg.name}_bos"
     run = None if args.no_save else RunFolder(cfg)
     return train(cfg, run)
 

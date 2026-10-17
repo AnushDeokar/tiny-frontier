@@ -61,6 +61,9 @@ class TrainConfig:
     val_path: str = "data/val.bin"
     tokenizer_path: str = "data/tokenizer.json"  # used to write sample.txt
     sample_prompt: str = "Once upon a time"
+    # Experiment 2: start every chunk with <s>, so position 0 always holds the
+    # same token (Llama-style). Off for the control: chunks start mid-text.
+    bos: bool = False
 
 
 @dataclass

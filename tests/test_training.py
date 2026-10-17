@@ -74,3 +74,29 @@ def test_config_rejects_wrong_types(tmp_path, bad):
     path.write_text(f"model:\n  {bad}\n")
     with pytest.raises(ValueError):
         load_config(path)
+
+
+def test_bos_chunks_start_with_the_same_token():
+    # Experiment 2: with a BOS, position 0 always holds <s>; the rest of the
+    # chunk is ordinary text and y is still x shifted by one.
+    from tiny_frontier.data.tokenizer import BOS_ID
+
+    tokens = np.arange(100, 10_100, dtype=np.uint16)  # no id collides with BOS_ID (0)
+    x, y = get_batch(tokens, 4, 16, generator=torch.Generator().manual_seed(1), bos_id=BOS_ID)
+    assert x.shape == y.shape == (4, 16)
+    assert (x[:, 0] == BOS_ID).all()
+    assert torch.equal(y[:, :-1], x[:, 1:])  # still shifted by one
+    assert torch.equal(y[:, 1:] - y[:, :-1], torch.ones(4, 15, dtype=torch.int64))  # contiguous text
+    assert (y[:, 0] >= 100).all()  # the first target is real text, not <s>
+
+    ex, ey = next(iter_eval_batches(tokens, batch_size=4, block_size=16, n_batches=1, bos_id=BOS_ID))
+    assert (ex[:, 0] == BOS_ID).all()
+    assert torch.equal(ey[:, :-1], ex[:, 1:])
+    assert ey[0, 0].item() == 100  # first eval chunk starts at the start of the split
+
+
+def test_bos_is_off_by_default():
+    # The control (and every run before Experiment 2's BOS run) had no BOS.
+    from tiny_frontier.config import TrainConfig
+
+    assert TrainConfig().bos is False

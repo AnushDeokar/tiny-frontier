@@ -7,6 +7,8 @@ from tokenizers.trainers import BpeTrainer
 
 SPECIAL_TOKENS = ["<s>", "</s>", "<pad>"]
 EOS_TOKEN = "</s>"
+BOS_TOKEN = "<s>"
+BOS_ID = SPECIAL_TOKENS.index(BOS_TOKEN)  # 0: special tokens get the first ids
 
 
 def create_bpe_tokenizer():

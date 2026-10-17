@@ -386,3 +386,149 @@ reverse order (control last) to rule out GPU warm-up effects:
   `git_commit.txt`): the sweep mode and the rolling cache. Neither changes
   training (without a cache the attention computation is identical), and the
   regression test confirms the control still gives its recorded loss.
+
+## Experiment 2: attention sinks and streaming
+
+**Question:** can a model trained on 256-token chunks keep generating far
+past that length with a small, fixed-size KV cache? StreamingLLM (Xiao et
+al., 2023) reports that evicting the *first* tokens from the cache breaks
+the model, because it parks spare attention on them ("attention sinks"), and
+that keeping 4 of them fixes it. Does that happen here, and why?
+
+**Setup.** 32 streams of 4,096 consecutive validation tokens (16× the
+training length), fed one token at a time with teacher forcing (the input is
+always the real next token). The models stay the same; only the KV cache
+policy changes:
+
+| Case | Model | Cache | What it tests |
+| --- | --- | --- | --- |
+| a | control (3 seeds) | full: keeps every token | positions past 256 were never seen in training |
+| b | control (3 seeds) | rolling(64): last 64 tokens | evicting the first tokens |
+| c | control (3 seeds) | sink(4, 64): first 4 + last 64 | the StreamingLLM fix |
+| d | control + learned sink (1 seed) | rolling(64) | the gpt-oss fix: an "attend to nothing" option per head |
+| e | `LLLLLL` W=64 from Exp 1 (3 seeds) | rolling(64) | a model trained with the window |
+| f | control + BOS (1 seed) | rolling(64) | added after b's surprise (below) |
+| g | control + BOS (1 seed) | sink(4, 64) | |
+
+Rolling and sink caches store keys *before* RoPE and number the kept tokens
+0, 1, 2, … by slot, as StreamingLLM does, so the model never sees a position
+above 67 however long the stream gets.
+
+Two models were trained for this experiment, each the control with one
+change, at the same LR and token budget:
+
+| Model | Change | Val loss (seed 1337) | Control seed 1337 |
+| --- | --- | --- | --- |
+| `control_sink` | a learned sink logit per head: an extra softmax column with no value vector, so a head's weights on real tokens can sum to less than 1 | 1.8845 | 1.8830 |
+| `control_bos` | `<s>` prepended to every training chunk, so position 0 always holds the same token (as in Llama-style training) | 1.8835 | 1.8830 |
+
+Neither change affects quality (both within the control's seed spread,
+1.8743–1.8830).
+
+### Result
+
+Mean loss per 128-token bucket (`results/exp2_stream.csv`; columns are the
+first position of each bucket):
+
+| Case | 0 | 128 | 256 | 512 | 1,024 | 2,048 | 3,968 | Mean 256–4,095 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| a  full cache | 1.790 | 1.620 | 2.255 | 4.147 | 4.485 | 4.608 | 4.760 | **4.503** |
+| b  rolling(64) | 1.800 | 1.672 | 1.654 | 1.669 | 1.703 | 1.695 | 1.710 | 1.738 |
+| c  sink(4, 64) | 1.799 | 1.673 | 1.656 | 1.673 | 1.708 | 1.699 | 1.714 | 1.742 |
+| d  learned sink, rolling(64) | 1.804 | 1.673 | 1.651 | 1.675 | 1.718 | 1.711 | 1.710 | 1.744 |
+| e  trained with W=64, rolling(64) | 1.780 | 1.655 | 1.632 | 1.657 | 1.688 | 1.662 | 1.696 | **1.718** |
+| f  BOS, rolling(64) | 1.800 | 1.710 | 1.693 | 1.688 | 1.736 | 1.735 | 1.725 | 1.768 |
+| g  BOS, sink(4, 64) | 1.788 | 1.669 | 1.657 | 1.661 | 1.710 | 1.696 | 1.697 | 1.733 |
+
+The paired cost of evicting the first tokens (same model, same streams, only
+the cache differs, so seed and text noise cancel):
+
+| Model | rolling − sink, mean over 32 buckets | Buckets where rolling is worse |
+| --- | --- | --- |
+| dense control (b − c) | −0.003 | 1 / 32 |
+| BOS control (f − g) | **+0.035** | **32 / 32** |
+
+![Streaming loss](../results/exp2_stream.png)
+
+### Findings
+
+1. **Past the training length, the full cache breaks; every 64-token cache
+   stays flat.** Case a matches the others up to position 256, then climbs
+   from ~1.6 to ~4.7, worse than the 4.0 the control scores with no
+   context at all (Exp 1). Every
+   rolling or sink cache holds ~1.74 out to 4,096 tokens. The full cache
+   fails because of unseen positions, not memory: it asks RoPE for angles
+   the model was never trained on.
+2. **The control did not need its first tokens (the prediction failed).**
+   Evicting them cost nothing (b ≈ c, −0.003). The attention data explains
+   why: in all 108 control heads (6 layers × 6 heads × 3 seeds), token 0
+   gets *less* attention than an even spread would give it (at most 0.99×
+   even, 0.17–0.83× on average per layer). There was no sink to lose.
+3. **The model does have spare attention to dump.** Given a learned sink,
+   heads send 20–91% of their attention in layer 0 (mean 66%) and 11–55% in
+   later layers to "nothing". The control has nowhere designed for that
+   attention, and it does not use token 0 for it either; where it goes is
+   untested (likely candidates: `</s>`, punctuation, the current token).
+4. **A sink formed as soon as position 0 always held the same token.**
+   Training chunks are random 256-token slices that start mid-story, so
+   position 0 holds a different token every time. With `<s>` prepended
+   (`control_bos`, otherwise identical), 30 of 36 heads put more than an even
+   share on token 0: 19–33× even in every layer-0 head, up to 17.5× in later
+   layers.
+5. **Then evicting it hurt, and keeping it fixed it.** f is worse than g in
+   all 32 buckets (+0.035). The two are identical for positions 1–63
+   (1.974 both) and split exactly when `<s>` leaves the cache at position 64
+   (1.630 vs 1.605 over positions 64–127). With the sink kept, the BOS model
+   is level with the control (g − c = −0.009).
+6. **A learned sink does not change the loss at this scale** (d ≈ b,
+   training val ≈ control). Its one visible effect is the first ~10 tokens of
+   a stream (3.5 vs 3.75 at position 1): with almost no context, attending to
+   nothing beats spreading weight over junk.
+7. **The best streaming model is the one trained with the window** (e, about
+   0.02 better than b throughout). It never learned to rely on tokens more
+   than 64 back, so the cache removes nothing it uses.
+
+![Attention on token 0](../results/exp2_first_token_heatmap.png)
+
+Heatmap: attention on token 0 divided by the share an even spread would give
+it (queries at positions 16–255; 1.0 = even, above 1 = a sink, below 1 =
+ignored). Last panel: the share each head of `control_sink` gives its learned
+sink. Data: `results/exp2_first_token_attention.csv`.
+
+### Why the BOS cost is 0.035, not an explosion
+
+StreamingLLM's large models reach perplexities in the hundreds or thousands
+when the sink is evicted; ours lose ~3.5% perplexity. Two plausible reasons,
+neither tested yet: our sink is moderate (22–38% of layer 0's attention,
+much less elsewhere), and the model is small (3.4M parameters) and briefly
+trained (50M tokens). Whether the dependence grows with scale is
+Experiment 3's question.
+
+### Predictions vs outcome
+
+| Prediction (made before running) | Outcome |
+| --- | --- |
+| a degrades past 256 tokens | ✓, badly (1.6 → 4.7) |
+| b collapses when the first tokens are evicted | ✗ for the control: no sink had formed. ✓ (mildly) once training had a fixed `<s>` |
+| c fixes b | Nothing to fix for the control; fully fixes the BOS model (g) |
+| d behaves like c | ✓ (≈ b ≈ c) |
+| e is best | ✓ |
+
+### Caveats
+
+- `control_sink` and `control_bos` are single-seed. The BOS conclusion rests
+  on a paired comparison (one model, two caches, same 32 streams), positive
+  in 32 of 32 buckets, plus a 19–33× effect in the attention data; a second
+  seed would still strengthen it.
+- One dataset, one model size. TinyStories stories are about 200 tokens, so
+  a 4,096-token stream is ~20 stories in a row: this tests whether the model
+  *stays stable*, not whether it uses long-range context (most of the
+  benefit of context comes from the first ~64 tokens, Exp 1).
+- Attention on token 0 is measured on normal 256-token chunks, not inside
+  the streams.
+- In the BOS streams, the `<s>`-only prediction is dropped so every case
+  scores the same text tokens at the same positions.
+- `control_sink` and `control_bos` were trained with uncommitted changes
+  (`-dirty` in `git_commit.txt`): the learned-sink and BOS code respectively,
+  i.e. the very feature under test. The code committed together with these
+  results is the code that ran.

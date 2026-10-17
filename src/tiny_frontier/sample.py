@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 
 from tiny_frontier.config import load_config
-from tiny_frontier.data.tokenizer import EOS_TOKEN, load_tokenizer
+from tiny_frontier.data.tokenizer import BOS_ID, EOS_TOKEN, load_tokenizer
 from tiny_frontier.generate import generate
 from tiny_frontier.model.model import LlamaModel
 from tiny_frontier.training.train import pick_device
@@ -38,7 +38,10 @@ def main(argv=None):
 
     tokenizer = load_tokenizer(cfg.train.tokenizer_path)
     eos_id = tokenizer.token_to_id(EOS_TOKEN)
-    prompt = torch.tensor([tokenizer.encode(args.prompt).ids], device=device)
+    ids = tokenizer.encode(args.prompt).ids
+    if cfg.train.bos:
+        ids = [BOS_ID] + ids  # match training: a BOS model always saw <s> first
+    prompt = torch.tensor([ids], device=device)
     generator = torch.Generator().manual_seed(args.seed) if args.seed is not None else None
 
     for i in range(args.num_samples):
