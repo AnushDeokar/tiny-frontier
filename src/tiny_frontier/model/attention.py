@@ -65,6 +65,66 @@ class KVCache:
         self.k, self.v, self.seen = [None] * n, [None] * n, [0] * n
 
 
+class StreamCache:
+    """KV cache for streaming past the training length (Experiment 2).
+
+    Three policies, set by n_sink and window:
+      full          n_sink=0, window=None   keep everything
+      rolling(W)    n_sink=0, window=W      keep the last W tokens
+      sink(k, W)    n_sink=k, window=W      keep the first k tokens forever + the last W
+                                            (StreamingLLM)
+
+    Two differences from KVCache:
+      * keys are stored BEFORE RoPE, and attention gives each key the position
+        of its slot in the cache (0, 1, 2, ...) instead of its place in the
+        text. With sink(4, 64) at text position 4,000 the sink tokens sit at
+        slots 0-3 and the query at slot 68: every distance stays below the
+        255 the model saw in training. Absolute positions would put the sinks
+        ~4,000 away, a distance RoPE was never trained on.
+      * the first n_sink tokens are never evicted.
+
+    Meant for feeding one token at a time (as the stream evaluator does).
+    """
+
+    slot_positions = True
+
+    def __init__(self, n_layers, n_sink=0, window=None):
+        if n_sink and window is None:
+            raise ValueError("a sink cache needs a window")
+        self.n_sink, self.window = n_sink, window
+        self.k = [None] * n_layers  # [B, H_kv, slots, head_dim], pre-RoPE
+        self.v = [None] * n_layers
+        self.seen = [0] * n_layers
+
+    def length(self, layer_idx):
+        return self.seen[layer_idx]
+
+    def stored(self, layer_idx):
+        k = self.k[layer_idx]
+        return 0 if k is None else k.shape[-2]
+
+    def update(self, layer_idx, k, v):
+        """Append the new tokens; return (keys, values, number of slots) for
+        this step's attention, then evict down to sinks + window."""
+        self.seen[layer_idx] += k.shape[-2]
+        if self.k[layer_idx] is not None:
+            k = torch.cat([self.k[layer_idx], k], dim=-2)
+            v = torch.cat([self.v[layer_idx], v], dim=-2)
+        n_slots = k.shape[-2]
+
+        keep_k, keep_v = k, v
+        if self.window is not None and n_slots > self.n_sink + self.window:
+            # The first n_sink slots always hold the first tokens of the
+            # stream, because they were never evicted.
+            keep_k = torch.cat([k[..., : self.n_sink, :], k[..., -self.window :, :]], dim=-2)
+            keep_v = torch.cat([v[..., : self.n_sink, :], v[..., -self.window :, :]], dim=-2)
+        self.k[layer_idx], self.v[layer_idx] = keep_k, keep_v
+        return k, v, n_slots
+
+    def nbytes(self):
+        return sum(t.numel() * t.element_size() for t in self.k + self.v if t is not None)
+
+
 class CausalSelfAttention(nn.Module):
     
     def __init__(
@@ -78,6 +138,7 @@ class CausalSelfAttention(nn.Module):
         norm_eps=1e-6,
         norm_offset=False,
         window=None,
+        learned_sink=False,
     ):
         super().__init__()
 
@@ -124,6 +185,12 @@ class CausalSelfAttention(nn.Module):
             self.q_norm = RMSNorm(head_dim, eps=norm_eps, offset=norm_offset)
             self.k_norm = RMSNorm(head_dim, eps=norm_eps, offset=norm_offset)
 
+        # Learned attention sink (Experiment 2): one learnable logit per head.
+        # Starts at 0, i.e. the sink begins as "worth one average token".
+        self.learned_sink = learned_sink
+        if learned_sink:
+            self.sink_logit = nn.Parameter(torch.zeros(num_heads))
+
     def forward(self, x, attention_mask=None, kv_cache=None, layer_idx=0):
         B, T, C = x.shape
 
@@ -144,19 +211,29 @@ class CausalSelfAttention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
 
-        # RoPE is applied to the new tokens only. Cached K already has it.
-        past_len = 0 if kv_cache is None else kv_cache.length(layer_idx)
-        q = self.rope(q, offset=past_len)
-        k = self.rope(k, offset=past_len)
+        if kv_cache is not None and getattr(kv_cache, "slot_positions", False):
+            # Streaming caches (StreamCache): keys are stored *before* RoPE,
+            # and positions are the keys' slots in the cache, not their place
+            # in the text. Every query-key distance then stays inside the
+            # range the model saw in training, however long the stream is.
+            k, v, n_slots = kv_cache.update(layer_idx, k.transpose(1, 2), v.transpose(1, 2))
+            q = self.rope(q, offset=n_slots - T).transpose(1, 2)
+            k = self.rope(k.transpose(1, 2), offset=0).transpose(1, 2)
+            k_start, past_len = 0, n_slots - T
+        else:
+            # RoPE is applied to the new tokens only. Cached K already has it.
+            past_len = 0 if kv_cache is None else kv_cache.length(layer_idx)
+            q = self.rope(q, offset=past_len)
+            k = self.rope(k, offset=past_len)
 
-        # [B, T, H, D] -> [B, H, T, D]
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+            # [B, T, H, D] -> [B, H, T, D]
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
 
-        k_start = 0  # absolute position of the first key we attend over
-        if kv_cache is not None:
-            k, v, k_start = kv_cache.update(layer_idx, k, v)
+            k_start = 0  # absolute position of the first key we attend over
+            if kv_cache is not None:
+                k, v, k_start = kv_cache.update(layer_idx, k, v)
 
         # The cache stores only n_kv_heads (that's the memory saving).
         # Expand to num_heads just for the score computation:
@@ -170,8 +247,8 @@ class CausalSelfAttention(nn.Module):
             q @ k.transpose(-2, -1)
         ) / (self.head_dim ** 0.5)
 
-        # Absolute positions. Keys run from k_start (0 unless a rolling cache
-        # dropped old ones) to the newest token; the T queries are the newest T.
+        # Positions. Keys run from k_start (0 unless a rolling cache dropped
+        # old ones) to the newest token; the T queries are the newest T.
         k_len = k.shape[-2]
         k_pos = k_start + torch.arange(k_len, device=x.device)
         q_pos = past_len + torch.arange(T, device=x.device)
@@ -190,10 +267,19 @@ class CausalSelfAttention(nn.Module):
                 float("-inf"),
             )
 
-        attention_weights = torch.softmax(
-            scores,
-            dim=-1,
-        )
+        if self.learned_sink:
+            # gpt-oss style sink: one extra "column" per head with a learned
+            # score and no value vector. Softmax runs over the real scores plus
+            # the sink; the sink's share is then dropped, so the weights on real
+            # tokens sum to *less than* 1. That is how a head says "attend to
+            # nothing" without parking attention on some real token.
+            sink = self.sink_logit.view(1, -1, 1, 1).expand(B, -1, T, 1).to(scores.dtype)
+            attention_weights = torch.softmax(torch.cat([scores, sink], dim=-1), dim=-1)[..., :-1]
+        else:
+            attention_weights = torch.softmax(
+                scores,
+                dim=-1,
+            )
 
         # Attention(Q,K,V)
         out = attention_weights @ v

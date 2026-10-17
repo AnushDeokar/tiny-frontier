@@ -33,6 +33,7 @@ class ModelConfig:
     window: int | None = None  # tokens a local layer can see (itself included)
     rope_base: float = 10000.0  # RoPE base for global layers
     rope_base_local: float | None = None  # RoPE base for local layers; None = same as rope_base
+    learned_sink: bool = False
 
 
 @dataclass

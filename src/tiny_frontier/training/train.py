@@ -232,6 +232,8 @@ def parse_args(argv=None):
     p.add_argument("--name")
     p.add_argument("--pattern", help='layer pattern, e.g. LLLLLL or LLGLLG (L = local, G = global)')
     p.add_argument("--window", type=int, help="tokens a local layer can see")
+    # Experiment 2.
+    p.add_argument("--learned-sink", action="store_true", help="add a learned attention sink per head")
     p.add_argument("--no-save", action="store_true", help="don't create a run folder")
     return p.parse_args(argv)
 
@@ -249,11 +251,17 @@ def main(argv=None):
         cfg.model.layer_pattern = args.pattern
     if args.window is not None:
         cfg.model.window = args.window
+    if args.learned_sink:
+        cfg.model.learned_sink = True
     if args.name is not None:
         cfg.name = args.name
-    elif args.pattern is not None:
-        # e.g. "control_LLLLLL_w32", so the run folder says what changed.
-        cfg.name = f"{cfg.name}_{args.pattern}_w{cfg.model.window}"
+    else:
+        # Name the run after what changed, e.g. "control_LLLLLL_w32" or
+        # "control_sink", so it can never be mistaken for a control run.
+        if args.pattern is not None:
+            cfg.name = f"{cfg.name}_{args.pattern}_w{cfg.model.window}"
+        if args.learned_sink:
+            cfg.name = f"{cfg.name}_sink"
     run = None if args.no_save else RunFolder(cfg)
     return train(cfg, run)
 

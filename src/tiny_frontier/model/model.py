@@ -49,6 +49,7 @@ class LlamaModel(nn.Module):
         window=None,
         rope_base=10000.0,
         rope_base_local=None,
+        learned_sink=False,
     ):
         super().__init__()
 
@@ -94,6 +95,7 @@ class LlamaModel(nn.Module):
                 post_norm=post_norm,
                 mlp_activation=mlp_activation,
                 window=window if self.layer_types[i] == "local" else None,
+                learned_sink=learned_sink,
             )
             for i in range(n_layers)
         ])
