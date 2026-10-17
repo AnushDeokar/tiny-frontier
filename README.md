@@ -2,7 +2,7 @@
 
 **How do modern LLMs keep their KV cache cheap?** This repo rebuilds the memory tricks behind Gemma 3, Mistral, StreamingLLM and gpt-oss from scratch in a 3.4M-parameter model, and tests each one with controlled experiments: one change at a time against a fixed control, multiple seeds, every run logged. Everything runs on one Apple M4 laptop, at $0 compute.
 
-Write-up series: [Part 1: Background](https://anush-deokar.vercel.app/writing/tiny-frontier/background) · [Part 2: Local vs global attention](https://anush-deokar.vercel.app/writing/tiny-frontier/local-global-attention) · Full results log: [`docs/results.md`](docs/results.md)
+Write-up series: [Part 1: Background](https://anushdeokar.xyz/writing/tiny-frontier/background) · [Part 2: Local vs global attention](https://anushdeokar.xyz/writing/tiny-frontier/local-global-attention) · [Part 3: Attention sinks](https://anushdeokar.xyz/writing/tiny-frontier/attention-sinks) · Full results log: [`docs/results.md`](docs/results.md)
 
 ## Headline results
 
@@ -136,7 +136,6 @@ docs/results.md      the full results log: numbers, findings, predictions vs out
 | Gemma 3 270M parity | ✅ |
 | Experiment 1: local/global attention | ✅ |
 | Experiment 2: attention sinks and streaming | ✅ |
-| Experiment 3: sinks across scale | ⏸ postponed |
 
 **Open question for Experiment 3:** at this scale, evicting a BOS sink costs 0.035 nats, while StreamingLLM reports perplexity blowing up in large models. Does the dependence on the sink grow with model size?
 

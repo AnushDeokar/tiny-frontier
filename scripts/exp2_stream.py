@@ -310,6 +310,113 @@ def plot():
                  fontsize=10, y=1.02)
     fig.savefig(RESULTS / "exp2_first_token_heatmap.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
+    plot_post()
+
+
+def plot_post():
+    """Single-message figures for the write-up (narrower than the full panels above)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
+
+    colours = {c[0]: c[4] for c in CASES}
+    labels = {"a": "full cache (keeps every token)", "b": "rolling cache, last 64 tokens",
+              "e": "trained with a 64-token window, rolling cache"}
+
+    # 1. Only the full cache breaks.
+    pos = read_csv(RESULTS / "exp2_stream_positions.csv")
+    fig, ax = plt.subplots(figsize=(9, 4.6))
+    for case_id in ["a", "b", "e"]:
+        ys = [float(r["loss"]) for r in pos if r["case"] == case_id]
+        if not ys:
+            continue
+        k = 32
+        smooth = [sum(ys[max(0, i - k + 1) : i + 1]) / len(ys[max(0, i - k + 1) : i + 1]) for i in range(len(ys))]
+        ax.plot(range(1, len(ys) + 1), smooth, color=colours[case_id], label=labels[case_id], lw=1.8)
+    ax.axvline(256, color="grey", ls="--", lw=1)
+    ax.text(256 * 1.06, 4.9, "training length (256)", fontsize=8.5, color="grey", va="top")
+    ax.set_xscale("log")
+    ax.set_xlabel("position in the stream (tokens, log scale)")
+    ax.set_ylabel("loss (nats/token, 32-token moving avg)")
+    ax.grid(alpha=0.3, which="both")
+    ax.legend(fontsize=8.5, loc="center left")
+    fig.tight_layout()
+    fig.savefig(RESULTS / "exp2_post_stream.png", dpi=150)
+    plt.close(fig)
+
+    # 2. Paired cost of evicting the first tokens.
+    buckets = read_csv(RESULTS / "exp2_stream.csv")
+    by = {(r["case"], int(r["bucket_start"])): float(r["mean_loss"]) for r in buckets}
+    fig, ax = plt.subplots(figsize=(9, 4.4))
+    for rolling, sink, colour, name in [("b", "c", "#d62728", "control (chunks start mid-text)"),
+                                        ("f", "g", "#ff7f0e", "control + <s> at the start of every chunk")]:
+        starts = [s for s in range(0, STREAM_LEN, BUCKET) if (rolling, s) in by and (sink, s) in by]
+        if not starts:
+            continue
+        gaps = [by[(rolling, s)] - by[(sink, s)] for s in starts]
+        ax.plot([s + BUCKET / 2 for s in starts], gaps, color=colour, marker="o", ms=3.5, lw=1.6,
+                label=f"{name}: mean {sum(gaps) / len(gaps):+.3f}")
+    ax.axhline(0, color="grey", lw=1)
+    ax.set_xlabel("position in the stream (tokens; 128-token buckets)")
+    ax.set_ylabel("extra loss from evicting the first tokens")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8.5, loc="upper right")
+    fig.tight_layout()
+    fig.savefig(RESULTS / "exp2_post_eviction_cost.png", dpi=150)
+    plt.close(fig)
+
+    # 3. Where attention goes: control vs BOS (vs even spread), and the learned sink.
+    att = read_csv(RESULTS / "exp2_first_token_attention.csv")
+
+    def mean_grid(model_name, column):
+        rows = [r for r in att if r["model"] == model_name and r[column] != ""]
+        if not rows:
+            return None
+        n_seeds = len({r["run"] for r in rows})
+        grid = [[0.0] * 6 for _ in range(6)]
+        for r in rows:
+            grid[int(r["layer"])][int(r["head"])] += float(r[column]) / n_seeds
+        return grid
+
+    base = even_share(None)
+    panels = []
+    for name, title in [("control", "control: chunks start mid-text"),
+                        ("control_bos", "control + <s> at position 0")]:
+        g = mean_grid(name, "attn_on_token0")
+        if g:
+            panels.append(("ratio", title, [[v / base for v in row] for row in g]))
+    g = mean_grid("control_sink", "learned_sink_share")
+    if g:
+        panels.append(("share", "learned sink: share sent to 'nothing'", g))
+    fig, axes = plt.subplots(1, len(panels), figsize=(4.1 * len(panels), 4.3), squeeze=False)
+    norm = TwoSlopeNorm(vmin=0, vcenter=1, vmax=4)
+    for ax, (kind, title, grid) in zip(axes[0], panels):
+        if kind == "ratio":
+            im_r = ax.imshow(grid, norm=norm, cmap="RdBu_r", aspect="auto")
+            fmt = lambda v: f"{v:.0f}×" if v >= 9.5 else f"{v:.1f}×"
+            dark = lambda v: v > 3 or v < 0.25
+        else:
+            im_s = ax.imshow(grid, vmin=0, vmax=1, cmap="viridis", aspect="auto")
+            fmt = lambda v: f"{v * 100:.0f}%"
+            dark = lambda v: v < 0.6
+        for i in range(6):
+            for j in range(6):
+                ax.text(j, i, fmt(grid[i][j]), ha="center", va="center", fontsize=7.5,
+                        color="white" if dark(grid[i][j]) else "black")
+        ax.set_title(title, fontsize=9.5)
+        ax.set_xlabel("head")
+        ax.set_ylabel("layer")
+        ax.set_xticks(range(6))
+        ax.set_yticks(range(6))
+    ratio_axes = [a for a, p in zip(axes[0], panels) if p[0] == "ratio"]
+    fig.colorbar(im_r, ax=ratio_axes, shrink=0.8, location="bottom", pad=0.2,
+                 label="attention on token 0 ÷ an even share  (1× = even, >1× = sink)")
+    if panels and panels[-1][0] == "share":
+        fig.colorbar(im_s, ax=axes[0][-1], shrink=0.8, location="bottom", pad=0.2, label="share of attention")
+    fig.savefig(RESULTS / "exp2_post_attention.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 def summary():
